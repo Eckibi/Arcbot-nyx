@@ -27,9 +27,10 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 def get_event_state(event):
     """
     Bestimmt, ob ein Event aktiv ist, oder wann die nächste Instanz startet (max. 4h im Voraus).
-    Berücksichtigt Events, die über Mitternacht hinausgehen (durch day_offset-Korrektur).
+    Behandelt API-Zeiten als LOKALE CET-Zeiten, um Doppelkorrektur zu vermeiden.
     """
-    now_utc = datetime.now(timezone.utc)
+    # Aktuelle Zeit in der korrekten Zeitzone (CET) holen
+    now_local = datetime.now(BERLIN_TZ)
     closest_future_slot_time = None
     
     FOUR_HOURS_IN_SECONDS = 4 * 60 * 60 
@@ -48,22 +49,25 @@ def get_event_state(event):
             start_t = datetime.strptime(start_str, "%H:%M").time()
             end_t = datetime.strptime(end_str, "%H:%M").time()
 
-            # KORREKTUR: Prüft GESTERN (-1), HEUTE (0) und MORGEN (1)
-            # Dies ist entscheidend, um Events zu finden, die z.B. um 02:00 Uhr am nächsten Tag starten.
+            # Prüft GESTERN (-1), HEUTE (0) und MORGEN (1)
             for day_offset in [-1, 0, 1]:
-                start_date = now_utc.date() + timedelta(days=day_offset)
+                start_date = now_local.date() + timedelta(days=day_offset)
                 
-                current_slot_start = datetime.combine(start_date, start_t, tzinfo=timezone.utc)
-                current_slot_end = datetime.combine(start_date, end_t, tzinfo=timezone.utc)
+                # WICHTIGE ÄNDERUNG: Weist BERLIN_TZ zu, um die Zeiten als LOKAL zu behandeln.
+                current_slot_start = datetime.combine(start_date, start_t, tzinfo=BERLIN_TZ)
+                current_slot_end = datetime.combine(start_date, end_t, tzinfo=BERLIN_TZ)
 
+                # Event über Mitternacht (z.B. 23:00 - 01:00)
                 if start_t >= end_t:
                     current_slot_end += timedelta(days=1)
                 
-                if current_slot_end < now_utc:
+                # Ignoriert Slots, die komplett vorbei sind (Vergleich mit now_local)
+                if current_slot_end < now_local:
                     continue
                     
-                if current_slot_start <= now_utc < current_slot_end:
-                    time_remaining = current_slot_end - now_utc
+                # PRÜFE: AKTIV
+                if current_slot_start <= now_local < current_slot_end:
+                    time_remaining = current_slot_end - now_local
                     minutes, seconds = divmod(int(time_remaining.total_seconds()), 60)
                     hours, minutes = divmod(minutes, 60)
                     
@@ -74,7 +78,8 @@ def get_event_state(event):
                     
                     return "ACTIVE", f"Endet in: {time_str}"
                 
-                if current_slot_start > now_utc:
+                # PRÜFE: NÄCHSTER START (innerhalb 4h)
+                if current_slot_start > now_local:
                     if closest_future_slot_time is None or current_slot_start < closest_future_slot_time:
                         closest_future_slot_time = current_slot_start
         
@@ -82,7 +87,8 @@ def get_event_state(event):
             continue
             
     if closest_future_slot_time:
-        time_remaining = closest_future_slot_time - now_utc
+        # time_remaining ist die korrekte Differenz (da beide Zeiten in CET sind)
+        time_remaining = closest_future_slot_time - now_local
         
         if time_remaining.total_seconds() > FOUR_HOURS_IN_SECONDS: 
             return "NONE", "Startet erst später oder morgen."
@@ -97,8 +103,8 @@ def get_event_state(event):
         else:
             time_str = f"{seconds}s"
             
-        berlin_time = closest_future_slot_time.astimezone(BERLIN_TZ)
-        absolute_time = berlin_time.strftime("%H:%M")
+        # closest_future_slot_time ist bereits in CET
+        absolute_time = closest_future_slot_time.strftime("%H:%M")
         
         return "NEXT", f"Startet in: {time_str} (um {absolute_time} CET)"
     
