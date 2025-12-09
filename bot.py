@@ -1,6 +1,7 @@
 # Importiere notwendige Bibliotheken
 import discord
 from discord.ext import commands
+# ... (andere Imports bleiben unverändert)
 import requests
 from dotenv import load_dotenv
 from datetime import datetime, time, timedelta, timezone
@@ -23,24 +24,23 @@ intents = discord.Intents.default()
 intents.message_content = True 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# --- 2. HILFSFUNKTION FÜR ZEITBERECHNUNG (4h-Fenster) ---
+# --- 2. HILFSFUNKTION FÜR ZEITBERECHNUNG (Unverändert) ---
+# ... (get_event_state bleibt unverändert) ...
+
 def get_event_state(event):
     """
-    Bestimmt, ob ein Event aktiv ist, oder wann die nächste Instanz startet (max. 4h im Voraus).
-    Behandelt API-Zeiten als LOKALE CET-Zeiten, um Doppelkorrektur zu vermeiden.
+    Bestimmt, ob ein Event aktiv ist, oder wann die nächste Instanz startet (max. 2h im Voraus).
     """
-    # Aktuelle Zeit in der korrekten Zeitzone (CET) holen
-    now_local = datetime.now(BERLIN_TZ)
+    now_utc = datetime.now(timezone.utc)
     closest_future_slot_time = None
     
-    FOUR_HOURS_IN_SECONDS = 4 * 60 * 60 
+    TWO_HOURS_IN_SECONDS = 2 * 60 * 60
     
     for slot in event.get('times', []):
         try:
             start_str = slot['start']
             end_str = slot['end']
 
-            # Korrektur des 24:00 Fehlers
             if start_str == '24:00':
                 start_str = '00:00'
             if end_str == '24:00':
@@ -49,25 +49,20 @@ def get_event_state(event):
             start_t = datetime.strptime(start_str, "%H:%M").time()
             end_t = datetime.strptime(end_str, "%H:%M").time()
 
-            # Prüft GESTERN (-1), HEUTE (0) und MORGEN (1)
-            for day_offset in [-1, 0, 1]:
-                start_date = now_local.date() + timedelta(days=day_offset)
+            for day_offset in [0, -1]:
+                start_date = now_utc.date() + timedelta(days=day_offset)
                 
-                # WICHTIGE ÄNDERUNG: Weist BERLIN_TZ zu, um die Zeiten als LOKAL zu behandeln.
-                current_slot_start = datetime.combine(start_date, start_t, tzinfo=BERLIN_TZ)
-                current_slot_end = datetime.combine(start_date, end_t, tzinfo=BERLIN_TZ)
+                current_slot_start = datetime.combine(start_date, start_t, tzinfo=timezone.utc)
+                current_slot_end = datetime.combine(start_date, end_t, tzinfo=timezone.utc)
 
-                # Event über Mitternacht (z.B. 23:00 - 01:00)
                 if start_t >= end_t:
                     current_slot_end += timedelta(days=1)
                 
-                # Ignoriert Slots, die komplett vorbei sind (Vergleich mit now_local)
-                if current_slot_end < now_local:
+                if current_slot_end < now_utc:
                     continue
                     
-                # PRÜFE: AKTIV
-                if current_slot_start <= now_local < current_slot_end:
-                    time_remaining = current_slot_end - now_local
+                if current_slot_start <= now_utc < current_slot_end:
+                    time_remaining = current_slot_end - now_utc
                     minutes, seconds = divmod(int(time_remaining.total_seconds()), 60)
                     hours, minutes = divmod(minutes, 60)
                     
@@ -78,8 +73,7 @@ def get_event_state(event):
                     
                     return "ACTIVE", f"Endet in: {time_str}"
                 
-                # PRÜFE: NÄCHSTER START (innerhalb 4h)
-                if current_slot_start > now_local:
+                if current_slot_start > now_utc:
                     if closest_future_slot_time is None or current_slot_start < closest_future_slot_time:
                         closest_future_slot_time = current_slot_start
         
@@ -87,10 +81,9 @@ def get_event_state(event):
             continue
             
     if closest_future_slot_time:
-        # time_remaining ist die korrekte Differenz (da beide Zeiten in CET sind)
-        time_remaining = closest_future_slot_time - now_local
+        time_remaining = closest_future_slot_time - now_utc
         
-        if time_remaining.total_seconds() > FOUR_HOURS_IN_SECONDS: 
+        if time_remaining.total_seconds() > TWO_HOURS_IN_SECONDS:
             return "NONE", "Startet erst später oder morgen."
             
         minutes, seconds = divmod(int(time_remaining.total_seconds()), 60)
@@ -103,15 +96,17 @@ def get_event_state(event):
         else:
             time_str = f"{seconds}s"
             
-        # closest_future_slot_time ist bereits in CET
-        absolute_time = closest_future_slot_time.strftime("%H:%M")
+        berlin_time = closest_future_slot_time.astimezone(BERLIN_TZ)
+        absolute_time = berlin_time.strftime("%H:%M")
         
         return "NEXT", f"Startet in: {time_str} (um {absolute_time} CET)"
-    
-    return "NONE", "Alle Slots für heute sind vorbei oder starten erst in über 4 Stunden."
+        
+    return "NONE", "Alle Slots für heute sind vorbei oder starten erst in über 2 Stunden."
 
 
 # --- 3. API-FUNKTIONEN ---
+# ... (get_arc_raiders_events und get_map_data bleiben unverändert) ...
+
 def get_arc_raiders_events():
     """Ruft die Event-Daten ab und gibt die Liste der Events zurück."""
     API_URL = "https://metaforge.app/api/arc-raiders/event-timers" 
@@ -124,7 +119,6 @@ def get_arc_raiders_events():
         print(f"Fehler beim Abrufen der Event-API-Daten: {e}")
         return []
 
-# HINWEIS: Diese Funktion gruppiert Events unter EINEM Map-Namen. Alle Events werden gelistet.
 def get_map_data():
     """Ruft die Event-Daten ab und gruppiert aktive/nächste Events pro Map."""
     
@@ -142,8 +136,6 @@ def get_map_data():
         state, time_info = get_event_state(event)
         
         if state in ["ACTIVE", "NEXT"]:
-            # Fügt das Event der Liste für diese Map hinzu.
-            # Dadurch erscheinen alle Events unter dem einmaligen Map-Namen.
             if state == "ACTIVE":
                 time_display = time_info.split(': ')[-1]
                 map_status[map_location]["active_events"].append(f"• {name} (Endet in {time_display})")
@@ -155,6 +147,7 @@ def get_map_data():
 
 
 # --- 4. FORMATIERUNGS-FUNKTIONEN ---
+# ... (format_single_event_embed und format_map_status_embed bleiben unverändert) ...
 
 def format_single_event_embed(event_data):
     """Erstellt einen Embed nur für ein einzelnes Event (für !timer)."""
@@ -195,18 +188,16 @@ def format_map_status_embed(map_data):
     
     embed = discord.Embed(
         title="🌍 Map-Timer Status (Berlin-Zeit)",
-        description="Übersicht der aktiven und bald startenden Events (unter 4h) pro Map-Location.",
+        description="Übersicht der aktiven und bald startenden Events (unter 2h) pro Map-Location.",
         color=discord.Color.blue()
     )
     
     sorted_maps = sorted(map_data.keys())
     
-    # Hier wird jeder Map-Name einmal als Feld-Name verwendet
     for map_location in sorted_maps:
         status = map_data[map_location]
         field_value = ""
         
-        # Alle Events unter diesem Map-Namen werden hier aufgelistet
         if status["active_events"]:
             active_list = "\n".join(status["active_events"])
             field_value += f"🟢 **AKTIV:**\n{active_list}\n"
@@ -238,14 +229,15 @@ async def on_ready():
     print(f'🤖 {bot.user.name} ist online und bereit!')
     print("----------------------------------------")
     
+    # 💥 NEUER BOT-STATUS FÜR DEN PRIVATEN SERVER
     activity = discord.Activity(
         name="!timer | !map-timer | !queen", 
-        type=discord.ActivityType.watching
+        type=discord.ActivityType.watching # Zeigt "Schaut zu !timer | !map-timer | !queen"
     )
     await bot.change_presence(activity=activity)
 
 
-# Befehl: !timer
+# Befehl: !timer (Unverändert)
 @bot.command(name='timer')
 async def show_timers(ctx):
     events_list = get_arc_raiders_events() 
@@ -284,10 +276,10 @@ async def show_timers(ctx):
     limited_events_list = events_to_display[:10]
     
     if not limited_events_list:
-        await ctx.send("Zurzeit sind alle Events vorbei oder starten erst in über 4 Stunden.")
+        await ctx.send("Zurzeit sind alle Events vorbei oder starten erst in über 2 Stunden.")
         return
 
-    await ctx.send(f"**Lade Statusblöcke für {len(limited_events_list)} aktive/bald startende Events (im 4h-Fenster)...**")
+    await ctx.send(f"**Lade Statusblöcke für {len(limited_events_list)} aktive/bald startende Events...**")
     
     for event in limited_events_list:
         try:
@@ -299,7 +291,7 @@ async def show_timers(ctx):
             print(f"Fehler beim Senden des Embeds für {event.get('name')}: {e}")
             traceback.print_exc() 
 
-# Befehl: !map-timer
+# Befehl: !map-timer (Unverändert)
 @bot.command(name='map-timer')
 async def show_map_status(ctx):
     """Zeigt den aggregierten Status aller Maps basierend nur auf Event-Timern an."""
@@ -313,7 +305,7 @@ async def show_map_status(ctx):
     map_embed = format_map_status_embed(map_data)
     await ctx.send(embed=map_embed)
 
-# Befehl: !queen
+# Befehl: !queen (Unverändert)
 @bot.command(name='queen')
 async def show_queen_meta(ctx):
     """Sendet ein Bild von 'Queen.png' mit einem Meta-Equipment-Hinweis für Matriarch/Queen."""
@@ -335,7 +327,7 @@ async def show_queen_meta(ctx):
     else:
         await ctx.send(f"Fehler: Die Datei '{image_path}' wurde nicht gefunden. Bitte stellen Sie sicher, dass sie im selben Ordner wie der Bot liegt.")
 
-# Befehl: !info
+# Befehl: !info (Unverändert)
 @bot.command(name='info')
 async def show_info(ctx):
     """Listet alle verfügbaren Commands auf."""
@@ -348,13 +340,13 @@ async def show_info(ctx):
     
     info_embed.add_field(
         name="!timer", 
-        value="Zeigt den aktuellen Status und die nächsten Startzeiten (< 4h) der **Events** an. (Berlin-Zeit)", 
+        value="Zeigt den aktuellen Status und die nächsten Startzeiten (< 2h) der **Events** an. (Berlin-Zeit)", 
         inline=False
     )
     
     info_embed.add_field(
         name="!map-timer", 
-        value="Zeigt den aggregierten **Status jeder Map** (basierend auf aktiven/kommenden Events < 4h) an. (Berlin-Zeit)", 
+        value="Zeigt den aggregierten **Status jeder Map** (basierend auf aktiven/kommenden Events) an. (Berlin-Zeit)", 
         inline=False
     )
     
