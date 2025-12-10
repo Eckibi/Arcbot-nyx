@@ -9,14 +9,14 @@ import json
 import traceback 
 import asyncio
 from collections import defaultdict 
+import pytz # <-- NEU
 
 # --- 1. VORBEREITUNG & ZEITZONE ---
 load_dotenv()
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 
-# Zeitzone für Berlin festlegen (CET = UTC+1)
-BERLIN_TZ_OFFSET = timedelta(hours=1) 
-BERLIN_TZ = timezone(BERLIN_TZ_OFFSET)
+# Zeitzone für Berlin mit pytz definieren (handhabt CET und CEST automatisch)
+BERLIN_TZ = pytz.timezone('Europe/Berlin') 
 
 # Definiere die Discord Intents
 intents = discord.Intents.default()
@@ -27,9 +27,9 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 def get_event_state(event):
     """
     Bestimmt, ob ein Event aktiv ist, oder wann die nächste Instanz startet (max. 4h im Voraus).
-    Behandelt API-Zeiten als LOKALE CET-Zeiten, um Doppelkorrektur zu vermeiden.
+    Behandelt API-Zeiten als LOKALE Berlin-Zeiten (CET/CEST).
     """
-    # Aktuelle Zeit in der korrekten Zeitzone (CET) holen
+    # Aktuelle Zeit in der korrekten Zeitzone (CET/CEST) holen
     now_local = datetime.now(BERLIN_TZ)
     closest_future_slot_time = None
     
@@ -49,19 +49,23 @@ def get_event_state(event):
             start_t = datetime.strptime(start_str, "%H:%M").time()
             end_t = datetime.strptime(end_str, "%H:%M").time()
 
-            # KORREKTUR: Prüft GESTERN (-1), HEUTE (0) und MORGEN (1)
+            # KORRIGIERT: Prüft GESTERN (-1), HEUTE (0) und MORGEN (1)
             for day_offset in [-1, 0, 1]: 
                 start_date = now_local.date() + timedelta(days=day_offset)
                 
-                # WICHTIGE ÄNDERUNG: Weist BERLIN_TZ zu, um die Zeiten als LOKAL zu behandeln.
-                current_slot_start = datetime.combine(start_date, start_t, tzinfo=BERLIN_TZ)
-                current_slot_end = datetime.combine(start_date, end_t, tzinfo=BERLIN_TZ)
+                # WICHTIGE ÄNDERUNG: Verwendet .localize() um die Zeiten als LOKAL zu behandeln.
+                try:
+                    current_slot_start = BERLIN_TZ.localize(datetime.combine(start_date, start_t))
+                    current_slot_end = BERLIN_TZ.localize(datetime.combine(start_date, end_t))
+                except pytz.exceptions.NonExistentTimeError:
+                    # Handhabt seltene Fälle bei Zeitumstellungen (wird hier ignoriert)
+                    continue
 
                 # Event über Mitternacht (z.B. 23:00 - 01:00)
                 if start_t >= end_t:
                     current_slot_end += timedelta(days=1)
                 
-                # Ignoriert Slots, die komplett vorbei sind (Vergleich mit now_local)
+                # Ignoriert Slots, die komplett vorbei sind
                 if current_slot_end < now_local:
                     continue
                     
@@ -76,6 +80,8 @@ def get_event_state(event):
                     else:
                         time_str = f"{minutes}m {seconds}s"
                     
+                    # Zeitzone der Endzeit korrekt anzeigen
+                    tz_abbreviation = now_local.strftime('%Z')
                     return "ACTIVE", f"Endet in: {time_str}"
                 
                 # PRÜFE: NÄCHSTER START (innerhalb 4h)
@@ -87,7 +93,6 @@ def get_event_state(event):
             continue
             
     if closest_future_slot_time:
-        # time_remaining ist die korrekte Differenz (da beide Zeiten in CET sind)
         time_remaining = closest_future_slot_time - now_local
         
         if time_remaining.total_seconds() > FOUR_HOURS_IN_SECONDS: 
@@ -103,10 +108,11 @@ def get_event_state(event):
         else:
             time_str = f"{seconds}s"
             
-        # closest_future_slot_time ist bereits in CET
+        # Abkürzung der Zeitzone (CET oder CEST) aus closest_future_slot_time holen
+        tz_abbreviation = closest_future_slot_time.strftime('%Z')
         absolute_time = closest_future_slot_time.strftime("%H:%M")
         
-        return "NEXT", f"Startet in: {time_str} (um {absolute_time} CET)"
+        return "NEXT", f"Startet in: {time_str} (um {absolute_time} {tz_abbreviation})"
     
     return "NONE", "Alle Slots für heute sind vorbei oder starten erst in über 4 Stunden."
 
@@ -121,6 +127,7 @@ def get_arc_raiders_events():
         data = response.json()
         return data.get('data', []) 
     except requests.exceptions.RequestException as e:
+        # Hier wird der Fehler geloggt, falls die API nicht erreichbar ist.
         print(f"Fehler beim Abrufen der Event-API-Daten: {e}")
         return []
 
@@ -145,9 +152,11 @@ def get_map_data():
             # Fügt das Event der Liste für diese Map hinzu.
             # Dadurch erscheinen alle Events unter dem einmaligen Map-Namen.
             if state == "ACTIVE":
+                # time_info ist z.B. "Endet in: 5m 42s"
                 time_display = time_info.split(': ')[-1]
-                map_status[map_location]["active_events"].append(f"• {name} (Endet in {time_display})")
+                map_status[map_location]["active_events"].append(f"• {name} ({time_display})")
             elif state == "NEXT":
+                # time_info ist z.B. "Startet in: 5m 40s (um 09:00 CET)"
                 time_display = time_info.split('Startet in: ')[-1]
                 map_status[map_location]["next_events"].append(f"• {name} ({time_display})")
             
@@ -163,6 +172,9 @@ def format_single_event_embed(event_data):
     icon_url = event_data.get('icon')
     
     state, time_info = get_event_state(event_data) 
+    
+    # Abkürzung der Zeitzone holen (CET oder CEST)
+    tz_abbreviation = datetime.now(BERLIN_TZ).strftime('%Z')
     
     if state == "ACTIVE":
         color = discord.Color.green()
@@ -188,13 +200,16 @@ def format_single_event_embed(event_data):
         embed.set_thumbnail(url=icon_url)
     
     current_berlin_time = datetime.now(BERLIN_TZ).strftime('%H:%M:%S')
-    embed.set_footer(text=f"Daten von MetaForge | Aktuelle Berlin-Zeit (CET): {current_berlin_time}")
+    embed.set_footer(text=f"Daten von MetaForge | Aktuelle Berlin-Zeit ({tz_abbreviation}): {current_berlin_time}")
     return embed
 
 def format_map_status_embed(map_data):
     
+    # Abkürzung der Zeitzone holen (CET oder CEST)
+    tz_abbreviation = datetime.now(BERLIN_TZ).strftime('%Z')
+    
     embed = discord.Embed(
-        title="🌍 Map-Timer Status (Berlin-Zeit)",
+        title=f"🌍 Map-Timer Status (Berlin-Zeit - {tz_abbreviation})",
         description="Übersicht der aktiven und bald startenden Events (unter 4h) pro Map-Location.",
         color=discord.Color.blue()
     )
@@ -225,7 +240,7 @@ def format_map_status_embed(map_data):
         )
         
     current_berlin_time = datetime.now(BERLIN_TZ).strftime('%H:%M:%S')
-    embed.set_footer(text=f"Daten von MetaForge | Aktuelle Berlin-Zeit (CET): {current_berlin_time}")
+    embed.set_footer(text=f"Daten von MetaForge | Aktuelle Berlin-Zeit ({tz_abbreviation}): {current_berlin_time}")
     return embed
 
 
@@ -275,12 +290,15 @@ async def show_timers(ctx):
                 tracked_events[name] = (priority, event)
 
     events_to_display = []
+    # Sortiert nach Aktivität/Nächster Start und dann alphabetisch
     sorted_tracked_events = sorted(tracked_events.values(), key=lambda x: (x[0], x[1].get('name')))
 
     for priority, event in sorted_tracked_events:
+        # Zeigt nur ACTIVE (0) und NEXT (1) Events an
         if priority < 2: 
             events_to_display.append(event)
             
+    # Limitiert die Anzeige auf die Top 10 Events
     limited_events_list = events_to_display[:10]
     
     if not limited_events_list:
