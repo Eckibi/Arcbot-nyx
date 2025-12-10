@@ -7,17 +7,26 @@ from datetime import datetime, time, timedelta
 import os
 import json
 import traceback 
+# Importiere notwendige Bibliotheken
+import discord
+from discord.ext import commands
+import requests
+from dotenv import load_dotenv
+from datetime import datetime, time, timedelta, timezone # Importiere timezone
+import os
+import json
+import traceback 
 import asyncio
 from collections import defaultdict 
-import pytz # WICHTIG: FÜR KORREKTE BERLIN-ZEITZONE (CET/CEST)
+import pytz # FÜR KORREKTE BERLIN-ZEITZONE (CET/CEST)
 
 # --- 1. VORBEREITUNG & ZEITZONE ---
 load_dotenv()
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 
-# Korrekte Zeitzone für Berlin (Europe/Berlin) mit pytz definieren.
-# Diese Definition weiß automatisch, ob +1 (CET) oder +2 (CEST) gilt.
-BERLIN_TZ = pytz.timezone('Europe/Berlin') 
+# Definiere die Zeitzonen:
+UTC_TZ = pytz.utc # UTC für die Serverzeit und die API-Interpretation
+BERLIN_TZ = pytz.timezone('Europe/Berlin') # Korrekte Berlin-Zeit (beachtet DST/Sommerzeit)
 
 # Definiere die Discord Intents
 intents = discord.Intents.default()
@@ -28,9 +37,9 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 def get_event_state(event):
     """
     Bestimmt, ob ein Event aktiv ist oder bald startet (max. 4h im Voraus).
-    Behandelt API-Zeiten als LOKALE Berlin-Zeiten.
+    Interpretiert API-Zeiten als UTC und wandelt sie in Berlin-Zeit um.
     """
-    # Aktuelle Zeit in der korrekten Zeitzone (CET/CEST) holen
+    # Aktuelle Zeit in Berlin holen (CEST/CET)
     now_local = datetime.now(BERLIN_TZ)
     closest_future_slot_time = None
     
@@ -52,17 +61,20 @@ def get_event_state(event):
 
             # KORREKTUR: Prüft GESTERN (-1), HEUTE (0) und MORGEN (1)
             for day_offset in [-1, 0, 1]: 
-                start_date = now_local.date() + timedelta(days=day_offset)
+                # Das Datum des aktuellen Tages in der Server-Zeitzone (UTC)
+                utc_date = datetime.now(UTC_TZ).date() + timedelta(days=day_offset)
                 
-                # WICHTIGE ÄNDERUNG: Weist die lokale BERLIN_TZ zu (korrigiert Sommerzeitfehler)
-                try:
-                    current_slot_start = BERLIN_TZ.localize(datetime.combine(start_date, start_t))
-                    current_slot_end = BERLIN_TZ.localize(datetime.combine(start_date, end_t))
-                except pytz.exceptions.NonExistentTimeError:
-                    continue
+                # 1. API-Zeit als UTC-Zeitstempel behandeln
+                current_slot_start_utc = UTC_TZ.localize(datetime.combine(utc_date, start_t))
+                current_slot_end_utc = UTC_TZ.localize(datetime.combine(utc_date, end_t))
+                
+                # 2. In die korrekte Berlin-Zeit umrechnen (beachtet DST)
+                current_slot_start = current_slot_start_utc.astimezone(BERLIN_TZ)
+                current_slot_end = current_slot_end_utc.astimezone(BERLIN_TZ)
 
                 # Event über Mitternacht (z.B. 23:00 - 01:00)
-                if start_t >= end_t:
+                # ACHTUNG: Dies muss nach der Umrechnung erfolgen, falls die API-Zeit Mitternacht ist.
+                if start_t >= end_t and day_offset != -1: # Nur für Heute/Morgen prüfen
                     current_slot_end += timedelta(days=1)
                 
                 # Ignoriert Slots, die komplett vorbei sind
@@ -112,7 +124,6 @@ def get_event_state(event):
         return "NEXT", f"Startet in: {time_str} (um {absolute_time} {tz_abbreviation})"
     
     return "NONE", "Alle Slots für heute sind vorbei oder starten erst in über 4 Stunden."
-
 
 # --- 3. API-FUNKTIONEN (Unverändert) ---
 def get_arc_raiders_events():
@@ -375,3 +386,4 @@ if DISCORD_TOKEN:
     bot.run(DISCORD_TOKEN)
 else:
     print("FEHLER: Der DISCORD_TOKEN wurde nicht in der .env-Datei gefunden.")
+
