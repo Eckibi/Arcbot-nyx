@@ -9,13 +9,14 @@ import json
 import traceback 
 import asyncio
 from collections import defaultdict 
-import pytz # FÜR KORREKTE BERLIN-ZEITZONE (CET/CEST)
+import pytz # WICHTIG: FÜR KORREKTE BERLIN-ZEITZONE (CET/CEST)
 
 # --- 1. VORBEREITUNG & ZEITZONE ---
 load_dotenv()
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 
 # Korrekte Zeitzone für Berlin (Europe/Berlin) mit pytz definieren.
+# Diese Definition weiß automatisch, ob +1 (CET) oder +2 (CEST) gilt.
 BERLIN_TZ = pytz.timezone('Europe/Berlin') 
 
 # Definiere die Discord Intents
@@ -50,16 +51,14 @@ def get_event_state(event):
             end_t = datetime.strptime(end_str, "%H:%M").time()
 
             # KORREKTUR: Prüft GESTERN (-1), HEUTE (0) und MORGEN (1)
-            # Das ist notwendig, um Events zu finden, die heute Abend starten und morgen früh enden.
             for day_offset in [-1, 0, 1]: 
                 start_date = now_local.date() + timedelta(days=day_offset)
                 
-                # Weist die lokale BERLIN_TZ zu (korrigiert Sommerzeitfehler)
+                # WICHTIGE ÄNDERUNG: Weist die lokale BERLIN_TZ zu (korrigiert Sommerzeitfehler)
                 try:
                     current_slot_start = BERLIN_TZ.localize(datetime.combine(start_date, start_t))
                     current_slot_end = BERLIN_TZ.localize(datetime.combine(start_date, end_t))
                 except pytz.exceptions.NonExistentTimeError:
-                    # Handhabt seltene Fälle bei Zeitumstellungen
                     continue
 
                 # Event über Mitternacht (z.B. 23:00 - 01:00)
@@ -115,7 +114,7 @@ def get_event_state(event):
     return "NONE", "Alle Slots für heute sind vorbei oder starten erst in über 4 Stunden."
 
 
-# --- 3. API-FUNKTIONEN ---
+# --- 3. API-FUNKTIONEN (Unverändert) ---
 def get_arc_raiders_events():
     """Ruft die Event-Daten ab und gibt die Liste der Events zurück."""
     API_URL = "https://metaforge.app/api/arc-raiders/event-timers" 
@@ -128,7 +127,6 @@ def get_arc_raiders_events():
         print(f"Fehler beim Abrufen der Event-API-Daten: {e}")
         return []
 
-# HINWEIS: Diese Funktion gruppiert Events unter EINEM Map-Namen. Alle Events werden gelistet.
 def get_map_data():
     """Ruft die Event-Daten ab und gruppiert aktive/nächste Events pro Map."""
     
@@ -156,16 +154,16 @@ def get_map_data():
     return dict(map_status)
 
 
-# --- 4. FORMATIERUNGS-FUNKTIONEN ---
+# --- 4. FORMATIERUNGS-FUNKTIONEN (Unverändert, aber mit neuer TZ-Abkürzung) ---
 
 def format_single_event_embed(event_data):
-    """Erstellt einen Embed nur für ein einzelnes Event (für !timer)."""
     name = event_data.get('name', 'Unbekanntes Event')
     map_location = event_data.get('map', 'Ort?')
     icon_url = event_data.get('icon')
     
     state, time_info = get_event_state(event_data) 
     
+    # Holt die korrekte Abkürzung (CET oder CEST)
     tz_abbreviation = datetime.now(BERLIN_TZ).strftime('%Z')
     
     if state == "ACTIVE":
@@ -234,11 +232,10 @@ def format_map_status_embed(map_data):
 
 
 # -------------------------------------------------------------
-# --- 5. BOT-BEFEHLE ---
+# --- 5. BOT-BEFEHLE (Unverändert) ---
 # -------------------------------------------------------------
 @bot.event
 async def on_ready():
-    """Wird ausgeführt, sobald der Bot erfolgreich verbunden ist und setzt den Status."""
     print(f'🤖 {bot.user.name} ist online und bereit!')
     print("----------------------------------------")
     
@@ -249,7 +246,6 @@ async def on_ready():
     await bot.change_presence(activity=activity)
 
 
-# Befehl: !timer
 @bot.command(name='timer')
 async def show_timers(ctx):
     events_list = get_arc_raiders_events() 
@@ -303,10 +299,8 @@ async def show_timers(ctx):
             print(f"Fehler beim Senden des Embeds für {event.get('name')}: {e}")
             traceback.print_exc() 
 
-# Befehl: !map-timer
 @bot.command(name='map-timer')
 async def show_map_status(ctx):
-    """Zeigt den aggregierten Status aller Maps basierend nur auf Event-Timern an."""
     
     map_data = get_map_data() 
     
@@ -317,10 +311,8 @@ async def show_map_status(ctx):
     map_embed = format_map_status_embed(map_data)
     await ctx.send(embed=map_embed)
 
-# Befehl: !queen
 @bot.command(name='queen')
 async def show_queen_meta(ctx):
-    """Sendet ein Bild von 'Queen.png' mit einem Meta-Equipment-Hinweis für Matriarch/Queen."""
     
     image_path = "Queen.png"
     
@@ -339,10 +331,8 @@ async def show_queen_meta(ctx):
     else:
         await ctx.send(f"Fehler: Die Datei '{image_path}' wurde nicht gefunden. Bitte stellen Sie sicher, dass sie im selben Ordner wie der Bot liegt.")
 
-# Befehl: !info
 @bot.command(name='info')
 async def show_info(ctx):
-    """Listet alle verfügbaren Commands auf."""
     
     info_embed = discord.Embed(
         title="ℹ️ Command-Übersicht",
