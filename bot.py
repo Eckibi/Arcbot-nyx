@@ -3,19 +3,19 @@ import discord
 from discord.ext import commands
 import requests
 from dotenv import load_dotenv
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, time, timedelta
 import os
 import json
 import traceback 
 import asyncio
 from collections import defaultdict 
-import pytz # <-- NEU
+import pytz # FÜR KORREKTE BERLIN-ZEITZONE (CET/CEST)
 
 # --- 1. VORBEREITUNG & ZEITZONE ---
 load_dotenv()
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 
-# Zeitzone für Berlin mit pytz definieren (handhabt CET und CEST automatisch)
+# Korrekte Zeitzone für Berlin (Europe/Berlin) mit pytz definieren.
 BERLIN_TZ = pytz.timezone('Europe/Berlin') 
 
 # Definiere die Discord Intents
@@ -26,8 +26,8 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 # --- 2. HILFSFUNKTION FÜR ZEITBERECHNUNG (4h-Fenster) ---
 def get_event_state(event):
     """
-    Bestimmt, ob ein Event aktiv ist, oder wann die nächste Instanz startet (max. 4h im Voraus).
-    Behandelt API-Zeiten als LOKALE Berlin-Zeiten (CET/CEST).
+    Bestimmt, ob ein Event aktiv ist oder bald startet (max. 4h im Voraus).
+    Behandelt API-Zeiten als LOKALE Berlin-Zeiten.
     """
     # Aktuelle Zeit in der korrekten Zeitzone (CET/CEST) holen
     now_local = datetime.now(BERLIN_TZ)
@@ -49,16 +49,17 @@ def get_event_state(event):
             start_t = datetime.strptime(start_str, "%H:%M").time()
             end_t = datetime.strptime(end_str, "%H:%M").time()
 
-            # KORRIGIERT: Prüft GESTERN (-1), HEUTE (0) und MORGEN (1)
+            # KORREKTUR: Prüft GESTERN (-1), HEUTE (0) und MORGEN (1)
+            # Das ist notwendig, um Events zu finden, die heute Abend starten und morgen früh enden.
             for day_offset in [-1, 0, 1]: 
                 start_date = now_local.date() + timedelta(days=day_offset)
                 
-                # WICHTIGE ÄNDERUNG: Verwendet .localize() um die Zeiten als LOKAL zu behandeln.
+                # Weist die lokale BERLIN_TZ zu (korrigiert Sommerzeitfehler)
                 try:
                     current_slot_start = BERLIN_TZ.localize(datetime.combine(start_date, start_t))
                     current_slot_end = BERLIN_TZ.localize(datetime.combine(start_date, end_t))
                 except pytz.exceptions.NonExistentTimeError:
-                    # Handhabt seltene Fälle bei Zeitumstellungen (wird hier ignoriert)
+                    # Handhabt seltene Fälle bei Zeitumstellungen
                     continue
 
                 # Event über Mitternacht (z.B. 23:00 - 01:00)
@@ -80,8 +81,6 @@ def get_event_state(event):
                     else:
                         time_str = f"{minutes}m {seconds}s"
                     
-                    # Zeitzone der Endzeit korrekt anzeigen
-                    tz_abbreviation = now_local.strftime('%Z')
                     return "ACTIVE", f"Endet in: {time_str}"
                 
                 # PRÜFE: NÄCHSTER START (innerhalb 4h)
@@ -89,7 +88,7 @@ def get_event_state(event):
                     if closest_future_slot_time is None or current_slot_start < closest_future_slot_time:
                         closest_future_slot_time = current_slot_start
         
-        except Exception as e:
+        except Exception:
             continue
             
     if closest_future_slot_time:
@@ -108,7 +107,6 @@ def get_event_state(event):
         else:
             time_str = f"{seconds}s"
             
-        # Abkürzung der Zeitzone (CET oder CEST) aus closest_future_slot_time holen
         tz_abbreviation = closest_future_slot_time.strftime('%Z')
         absolute_time = closest_future_slot_time.strftime("%H:%M")
         
@@ -127,7 +125,6 @@ def get_arc_raiders_events():
         data = response.json()
         return data.get('data', []) 
     except requests.exceptions.RequestException as e:
-        # Hier wird der Fehler geloggt, falls die API nicht erreichbar ist.
         print(f"Fehler beim Abrufen der Event-API-Daten: {e}")
         return []
 
@@ -149,14 +146,10 @@ def get_map_data():
         state, time_info = get_event_state(event)
         
         if state in ["ACTIVE", "NEXT"]:
-            # Fügt das Event der Liste für diese Map hinzu.
-            # Dadurch erscheinen alle Events unter dem einmaligen Map-Namen.
             if state == "ACTIVE":
-                # time_info ist z.B. "Endet in: 5m 42s"
                 time_display = time_info.split(': ')[-1]
                 map_status[map_location]["active_events"].append(f"• {name} ({time_display})")
             elif state == "NEXT":
-                # time_info ist z.B. "Startet in: 5m 40s (um 09:00 CET)"
                 time_display = time_info.split('Startet in: ')[-1]
                 map_status[map_location]["next_events"].append(f"• {name} ({time_display})")
             
@@ -173,7 +166,6 @@ def format_single_event_embed(event_data):
     
     state, time_info = get_event_state(event_data) 
     
-    # Abkürzung der Zeitzone holen (CET oder CEST)
     tz_abbreviation = datetime.now(BERLIN_TZ).strftime('%Z')
     
     if state == "ACTIVE":
@@ -205,7 +197,6 @@ def format_single_event_embed(event_data):
 
 def format_map_status_embed(map_data):
     
-    # Abkürzung der Zeitzone holen (CET oder CEST)
     tz_abbreviation = datetime.now(BERLIN_TZ).strftime('%Z')
     
     embed = discord.Embed(
@@ -216,12 +207,10 @@ def format_map_status_embed(map_data):
     
     sorted_maps = sorted(map_data.keys())
     
-    # Hier wird jeder Map-Name einmal als Feld-Name verwendet
     for map_location in sorted_maps:
         status = map_data[map_location]
         field_value = ""
         
-        # Alle Events unter diesem Map-Namen werden hier aufgelistet
         if status["active_events"]:
             active_list = "\n".join(status["active_events"])
             field_value += f"🟢 **AKTIV:**\n{active_list}\n"
@@ -290,15 +279,12 @@ async def show_timers(ctx):
                 tracked_events[name] = (priority, event)
 
     events_to_display = []
-    # Sortiert nach Aktivität/Nächster Start und dann alphabetisch
     sorted_tracked_events = sorted(tracked_events.values(), key=lambda x: (x[0], x[1].get('name')))
 
     for priority, event in sorted_tracked_events:
-        # Zeigt nur ACTIVE (0) und NEXT (1) Events an
         if priority < 2: 
             events_to_display.append(event)
             
-    # Limitiert die Anzeige auf die Top 10 Events
     limited_events_list = events_to_display[:10]
     
     if not limited_events_list:
