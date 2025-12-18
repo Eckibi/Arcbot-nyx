@@ -67,10 +67,6 @@ def get_map_data():
     return dict(map_status)
 
 # --- 3. FIX: MAP-TIMER LOGIK ---
-@bot.command(name='map-timer')
-async def map_timer(ctx):
-    events = get_arc_raiders_events()
-    if not events: return await ctx.send("Konnte Daten nicht laden.")
     
     maps = defaultdict(lambda: {"active": [], "next": []})
     for e in events:
@@ -232,6 +228,7 @@ async def on_ready():
 
 if DISCORD_TOKEN:
     bot.run(DISCORD_TOKEN)
+
 
 
 
