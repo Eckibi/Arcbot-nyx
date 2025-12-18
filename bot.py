@@ -19,7 +19,7 @@ BERLIN_TZ = pytz.timezone('Europe/Berlin')
 
 # Mute-System Konfiguration
 # BITTE HIER DIE ID DEINES AFK/WAITING VOIP-CHANNELS EINTRAGEN
-MUTE_AFK_CHANNEL_ID = 000000000000000000 
+MUTE_AFK_CHANNEL_ID = 1451345520881701029
 
 # Tracking für Mute-Dauer
 mute_tracker = {}
@@ -206,3 +206,4 @@ if DISCORD_TOKEN:
     bot.run(DISCORD_TOKEN)
 else:
     print("FEHLER: DISCORD_TOKEN in Render Environment Variables nicht gefunden!")
+
