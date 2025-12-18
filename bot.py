@@ -31,58 +31,40 @@ AFK_TIMEOUT_MINUTES = 3
 deaf_users = {} # Speicher für Ursprungschannels
 
 # --- 2. ORIGINAL API-LOGIK (Unverändert) ---
-def get_event_state(event):
-    now_local = datetime.now(BERLIN_TZ)
-    closest_future_slot_time = None
-    FOUR_HOURS_IN_SECONDS = 4 * 60 * 60 
-    
-    for slot in event.get('times', []):
-        try:
-            start_str = slot['start'].replace('24:00', '00:00')
-            end_str = slot['end'].replace('24:00', '00:00')
-            start_t = datetime.strptime(start_str, "%H:%M").time()
-            end_t = datetime.strptime(end_str, "%H:%M").time()
-
-            for day_offset in [-1, 0, 1]: 
-                utc_date = datetime.now(UTC_TZ).date() + timedelta(days=day_offset)
-                current_slot_start = UTC_TZ.localize(datetime.combine(utc_date, start_t)).astimezone(BERLIN_TZ)
-                current_slot_end = UTC_TZ.localize(datetime.combine(utc_date, end_t)).astimezone(BERLIN_TZ)
-                if start_t >= end_t and day_offset != -1:
-                    current_slot_end += timedelta(days=1)
-                
-                if current_slot_end < now_local: continue
-                if current_slot_start <= now_local < current_slot_end:
-                    time_remaining = current_slot_end - now_local
-                    m, s = divmod(int(time_remaining.total_seconds()), 60)
-                    h, m = divmod(m, 60)
-                    return "ACTIVE", f"Endet in: {h}h {m}m" if h > 0 else f"Endet in: {m}m {s}s"
-                
-                if current_slot_start > now_local:
-                    if closest_future_slot_time is None or current_slot_start < closest_future_slot_time:
-                        closest_future_slot_time = current_slot_start
-        except: continue
-            
-    if closest_future_slot_time:
-        time_remaining = closest_future_slot_time - now_local
-        if time_remaining.total_seconds() <= FOUR_HOURS_IN_SECONDS:
-            m, s = divmod(int(time_remaining.total_seconds()), 60)
-            h, m = divmod(m, 60)
-            return "NEXT", f"Startet in: {h}h {m}m" if h > 0 else f"Startet in: {m}m"
-    return "NONE", "Keine relevanten Events."
-
 def get_arc_raiders_events():
+    """Ruft die Event-Daten ab und gibt die Liste der Events zurück."""
+    API_URL = "https://metaforge.app/api/arc-raiders/event-timers" 
     try:
-        r = requests.get("https://metaforge.app/api/arc-raiders/event-timers", timeout=10)
-        return r.json().get('data', [])
-    except: return []
+        response = requests.get(API_URL, timeout=10)
+        response.raise_for_status() 
+        data = response.json()
+        return data.get('data', []) 
+    except requests.exceptions.RequestException as e:
+        print(f"Fehler beim Abrufen der Event-API-Daten: {e}")
+        return []
 
-def format_single_event_embed(event_data):
-    name = event_data.get('name', 'Event')
-    state, time_info = get_event_state(event_data)
-    color = discord.Color.green() if state == "ACTIVE" else discord.Color.orange() if state == "NEXT" else discord.Color.dark_grey()
-    embed = discord.Embed(title=f"⚔️ {name}", description=f"Status: **{time_info}**", color=color)
-    if event_data.get('icon'): embed.set_thumbnail(url=event_data['icon'])
-    return embed
+def get_map_data():
+    """Ruft die Event-Daten ab und gruppiert aktive/nächste Events pro Map."""
+    events_list = get_arc_raiders_events()
+    map_status = defaultdict(lambda: {"active_events": [], "next_events": []})
+    
+    for event in events_list:
+        name = event.get('name')
+        map_location = event.get('map')
+        if not name or not map_location:
+            continue
+            
+        state, time_info = get_event_state(event)
+        
+        if state in ["ACTIVE", "NEXT"]:
+            if state == "ACTIVE":
+                time_display = time_info.split(': ')[-1]
+                map_status[map_location]["active_events"].append(f"• {name} ({time_display})")
+            elif state == "NEXT":
+                time_display = time_info.split('Startet in: ')[-1]
+                map_status[map_location]["next_events"].append(f"• {name} ({time_display})")
+            
+    return dict(map_status)
 
 # --- 3. FIX: MAP-TIMER LOGIK ---
 @bot.command(name='map-timer')
@@ -250,5 +232,6 @@ async def on_ready():
 
 if DISCORD_TOKEN:
     bot.run(DISCORD_TOKEN)
+
 
 
