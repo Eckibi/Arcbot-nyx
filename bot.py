@@ -2,11 +2,13 @@ import discord
 from discord.ext import commands, tasks
 import requests
 from dotenv import load_dotenv
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta, timezone # Importiere timezone
 import os
+import json
+import traceback
 import asyncio
 from collections import defaultdict 
-import pytz 
+import pytz # FÜR KORREKTE BERLIN-ZEITZONE (CET/CEST)
 
 # --- 1. SETUP ---
 load_dotenv()
@@ -248,4 +250,5 @@ async def on_ready():
 
 if DISCORD_TOKEN:
     bot.run(DISCORD_TOKEN)
+
 
