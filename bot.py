@@ -11,7 +11,7 @@ import pytz
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 UTC_TZ = pytz.utc
 BERLIN_TZ = pytz.timezone('Europe/Berlin')
-MUTE_AFK_CHANNEL_ID = 1341339526992236604
+MUTE_AFK_CHANNEL_ID = 1451345520881701029
 mute_tracker = {}
 
 intents = discord.Intents.default()
@@ -151,3 +151,4 @@ async def timer(ctx):
         await asyncio.sleep(0.5)
 
 if DISCORD_TOKEN: bot.run(DISCORD_TOKEN)
+
